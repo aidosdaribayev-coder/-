@@ -1,0 +1,18 @@
+{
+  "name": "data-agent-server",
+  "version": "1.0.0",
+  "description": "ИИ-агент для анализа Excel файлов из папки",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --watch"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "chokidar": "^3.5.3",
+    "cors": "^2.8.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.18.2",
+    "xlsx": "^0.18.5"
+  }
+}
