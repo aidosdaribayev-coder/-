@@ -20,7 +20,11 @@ const CONFIG = {
   ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin123',
   SAMPLE_SIZE_FOR_AI: 50,
 };
-
+// Создаём папку для БД
+const dbDir = path.dirname(CONFIG.DB_PATH);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
 // === MULTER (загрузка файлов) ===
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
