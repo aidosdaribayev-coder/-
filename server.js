@@ -21,6 +21,13 @@ const CONFIG = {
 
 // === ИНИЦИАЛИЗАЦИЯ SQLITE ===
 console.log('📦 Инициализация SQLite базы данных...');
+// Создаём папку для БД если не существует
+const fs = require('fs');
+const path = require('path');
+const dbDir = path.dirname(CONFIG.DB_PATH);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
 const db = new Database(CONFIG.DB_PATH);
 db.pragma('journal_mode = WAL'); // Быстрее для записи
 
