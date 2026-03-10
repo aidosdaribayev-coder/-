@@ -269,8 +269,35 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="adminLoginModal">
+    <div class="modal">
+      <h2>🔐 Вход для администратора</h2>
+      <p>Введите пароль администратора:</p>
+      <input type="password" id="adminPasswordInput" placeholder="Пароль...">
+      <button class="modal-btn" onclick="adminLogin()">Войти</button>
+      <button class="modal-btn cancel" onclick="document.getElementById('adminLoginModal').classList.remove('active')">Отмена</button>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="adminPanelModal">
+    <div class="modal" style="max-width:480px">
+      <h2>⚙️ Панель администратора</h2>
+      <p>Загрузите Excel или CSV файл:</p>
+      <div id="uploadDropZone" style="border:2px dashed var(--border);border-radius:10px;padding:30px;text-align:center;cursor:pointer;margin-bottom:14px;transition:border-color 0.2s" ondragover="event.preventDefault();this.style.borderColor='var(--accent)'" ondragleave="this.style.borderColor='var(--border)'" ondrop="handleFileDrop(event)">
+        <div style="font-size:32px;margin-bottom:8px">📂</div>
+        <div style="font-size:13px;color:var(--text-secondary)">Перетащите файл сюда<br>или нажмите для выбора</div>
+        <input type="file" id="uploadFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="uploadFile(this.files[0])">
+      </div>
+      <button class="modal-btn" onclick="document.getElementById('uploadFileInput').click()">📁 Выбрать файл</button>
+      <div id="uploadStatus" style="margin-top:10px;font-size:12px;color:var(--text-secondary)"></div>
+      <hr style="border-color:var(--border);margin:16px 0">
+      <div id="adminFilesList"></div>
+      <button class="modal-btn cancel" onclick="document.getElementById('adminPanelModal').classList.remove('active')" style="margin-top:10px">Закрыть</button>
+    </div>
+  </div>
+
   <header class="header">
-    <div class="logo">⚡</div>
+    <div class="logo" onclick="handleLogoClick()" title="">⚡</div>
     <div>
       <h1>Data Agent</h1>
       <p>ИИ Аналитик Энергетики</p>
@@ -605,6 +632,119 @@
     async function rescan() { await fetch(`${API}/rescan`, {method:'POST'}); await loadStatus(); await loadFilters(); alert('Обновлено!'); }
 
     init();
+
+    // === АДМИН-ПАНЕЛЬ ===
+    let adminPassword = null;
+    let logoClickCount = 0;
+    let logoClickTimer = null;
+
+    function handleLogoClick() {
+      logoClickCount++;
+      clearTimeout(logoClickTimer);
+      logoClickTimer = setTimeout(() => { logoClickCount = 0; }, 600);
+      if (logoClickCount >= 3) {
+        logoClickCount = 0;
+        if (adminPassword) {
+          openAdminPanel();
+        } else {
+          document.getElementById('adminLoginModal').classList.add('active');
+          document.getElementById('adminPasswordInput').focus();
+        }
+      }
+    }
+
+    async function adminLogin() {
+      const pwd = document.getElementById('adminPasswordInput').value;
+      try {
+        const res = await fetch(`${API}/admin/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pwd }),
+        });
+        if (res.ok) {
+          adminPassword = pwd;
+          document.getElementById('adminLoginModal').classList.remove('active');
+          document.getElementById('adminPasswordInput').value = '';
+          openAdminPanel();
+        } else {
+          alert('Неверный пароль');
+        }
+      } catch(e) {
+        alert('Ошибка подключения');
+      }
+    }
+
+    async function openAdminPanel() {
+      document.getElementById('adminPanelModal').classList.add('active');
+      document.getElementById('uploadStatus').textContent = '';
+      await loadAdminFiles();
+    }
+
+    async function loadAdminFiles() {
+      const res = await fetch(`${API}/status`);
+      const data = await res.json();
+      const list = document.getElementById('adminFilesList');
+      if (!data.files.length) {
+        list.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">Файлов нет</div>';
+        return;
+      }
+      list.innerHTML = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Загруженные файлы:</div>' +
+        data.files.map(f => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px;background:var(--bg-tertiary);border-radius:6px;margin-bottom:6px;font-size:12px">
+            <span>📄 ${f.name} <span style="color:var(--text-muted)">(${f.totalRows.toLocaleString()} строк)</span></span>
+            <button onclick="deleteAdminFile('${f.name.replace(/'/g, "\\'")}')" style="background:var(--danger);border:none;color:white;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px">Удалить</button>
+          </div>
+        `).join('');
+    }
+
+    async function deleteAdminFile(filename) {
+      if (!confirm(`Удалить файл "${filename}"?`)) return;
+      await fetch(`${API}/admin/files/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+        headers: { 'x-admin-password': adminPassword },
+      });
+      await loadAdminFiles();
+      await loadStatus();
+      await loadFilters();
+    }
+
+    function handleFileDrop(event) {
+      event.preventDefault();
+      document.getElementById('uploadDropZone').style.borderColor = 'var(--border)';
+      const file = event.dataTransfer.files[0];
+      if (file) uploadFile(file);
+    }
+
+    async function uploadFile(file) {
+      if (!file) return;
+      const status = document.getElementById('uploadStatus');
+      status.textContent = `⏳ Загружается: ${file.name}...`;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch(`${API}/admin/upload`, {
+          method: 'POST',
+          headers: { 'x-admin-password': adminPassword },
+          body: formData,
+        });
+        const data = await res.json();
+        if (data.ok) {
+          status.style.color = 'var(--accent)';
+          status.textContent = `✅ Загружено: ${data.filename} (${data.rows.toLocaleString()} строк)`;
+          await loadAdminFiles();
+          await loadStatus();
+          await loadFilters();
+        } else {
+          status.style.color = 'var(--danger)';
+          status.textContent = `❌ Ошибка: ${data.error}`;
+        }
+      } catch(e) {
+        status.style.color = 'var(--danger)';
+        status.textContent = `❌ ${e.message}`;
+      }
+    }
   </script>
 </body>
 </html>

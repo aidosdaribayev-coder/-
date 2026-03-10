@@ -5,6 +5,7 @@ const path = require('path');
 const readline = require('readline');
 const Database = require('better-sqlite3');
 const XLSX = require('xlsx');
+const multer = require('multer');
 
 const app = express();
 app.use(cors());
@@ -16,18 +17,37 @@ const CONFIG = {
   DATA_FOLDER: process.env.DATA_FOLDER || './data',
   DB_PATH: process.env.DB_PATH || './database.sqlite',
   API_KEY: process.env.ANTHROPIC_API_KEY || '',
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin123',
   SAMPLE_SIZE_FOR_AI: 50,
 };
 
+// === MULTER (загрузка файлов) ===
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const folder = path.resolve(CONFIG.DATA_FOLDER);
+    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
+    cb(null, folder);
+  },
+  filename: (req, file, cb) => {
+    // Сохраняем оригинальное имя файла
+    const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    cb(null, originalName);
+  },
+});
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (/\.(csv|xlsx|xls)$/i.test(file.originalname)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Только CSV и Excel файлы'));
+    }
+  },
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200 МБ
+});
+
 // === ИНИЦИАЛИЗАЦИЯ SQLITE ===
 console.log('📦 Инициализация SQLite базы данных...');
-// Создаём папку для БД если не существует
-const fs = require('fs');
-const path = require('path');
-const dbDir = path.dirname(CONFIG.DB_PATH);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
 const db = new Database(CONFIG.DB_PATH);
 db.pragma('journal_mode = WAL'); // Быстрее для записи
 
@@ -1030,6 +1050,75 @@ app.delete('/api/chats/:id', (req, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Не удалось удалить' });
   }
+});
+
+// Проверка пароля администратора
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body;
+  if (password === CONFIG.ADMIN_PASSWORD) {
+    res.json({ ok: true });
+  } else {
+    res.status(401).json({ error: 'Неверный пароль' });
+  }
+});
+
+// Загрузка файла (только для администратора)
+app.post('/api/admin/upload', (req, res) => {
+  const adminPassword = req.headers['x-admin-password'];
+  if (adminPassword !== CONFIG.ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Нет доступа' });
+  }
+
+  upload.single('file')(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Файл не выбран' });
+    }
+
+    console.log(`\n📤 Загружен файл: ${req.file.filename}`);
+
+    // Удаляем старую запись если есть
+    db.prepare('DELETE FROM files_meta WHERE filename LIKE ?').run(`${req.file.filename}%`);
+    const oldTable = req.file.filename.replace(/[^a-zA-Z0-9]/g, '_');
+    try { db.exec(`DROP TABLE IF EXISTS "${oldTable}"`); } catch(e) {}
+
+    // Загружаем в SQLite
+    const filePath = req.file.path;
+    const ext = path.extname(req.file.filename).toLowerCase();
+    let result;
+    if (ext === '.csv') {
+      result = await loadCsvToSqlite(filePath);
+    } else {
+      result = loadExcelToSqlite(filePath);
+    }
+
+    if (result) {
+      res.json({ ok: true, filename: req.file.filename, rows: result.rowCount || result.totalRows });
+    } else {
+      res.status(500).json({ error: 'Ошибка загрузки файла' });
+    }
+  });
+});
+
+// Удаление файла (только для администратора)
+app.delete('/api/admin/files/:filename', (req, res) => {
+  const adminPassword = req.headers['x-admin-password'];
+  if (adminPassword !== CONFIG.ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Нет доступа' });
+  }
+
+  const filename = decodeURIComponent(req.params.filename);
+  db.prepare('DELETE FROM files_meta WHERE filename LIKE ?').run(`${filename}%`);
+  const tableName = filename.replace(/[^a-zA-Z0-9]/g, '_');
+  try { db.exec(`DROP TABLE IF EXISTS "${tableName}"`); } catch(e) {}
+
+  const filePath = path.join(path.resolve(CONFIG.DATA_FOLDER), filename);
+  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+  console.log(`🗑️ Удалён файл: ${filename}`);
+  res.json({ ok: true });
 });
 
 // Статический файл
